@@ -240,12 +240,15 @@ if barstate.islast
 long_alert = enable_sl_alert and sl_long_exceeded and (sl_mode == "Long" or sl_mode == "Both")
 short_alert = enable_sl_alert and sl_short_exceeded and (sl_mode == "Short" or sl_mode == "Both")
 
-alertcondition(long_alert, title="Long SL Too Big", message="LONG SL exceeds max! SL = {{plot_0}} ticks (max: " + str.tostring(max_sl_ticks) + ")")
-alertcondition(short_alert, title="Short SL Too Big", message="SHORT SL exceeds max! SL = {{plot_1}} ticks (max: " + str.tostring(max_sl_ticks) + ")")
+// alertcondition requires const string — use static messages for UI-based alerts
+alertcondition(long_alert, title="Long SL Too Big", message="LONG SL exceeds maximum! Check chart for details.")
+alertcondition(short_alert, title="Short SL Too Big", message="SHORT SL exceeds maximum! Check chart for details.")
 
-// Plot SL tick values for alert messages
-plot(sl_long_ticks, "Long SL Ticks", display=display.none)
-plot(sl_short_ticks, "Short SL Ticks", display=display.none)
+// alert() accepts series string — use for dynamic messages with actual values
+if long_alert
+    alert("LONG SL TOO BIG: " + str.tostring(sl_long_ticks, "#.#") + " ticks (max: " + str.tostring(max_sl_ticks, "#.#") + ") | Risk: " + str.tostring(risk_long_pct, "#.##") + "% | " + syminfo.ticker, alert.freq_once_per_bar)
+if short_alert
+    alert("SHORT SL TOO BIG: " + str.tostring(sl_short_ticks, "#.#") + " ticks (max: " + str.tostring(max_sl_ticks, "#.#") + ") | Risk: " + str.tostring(risk_short_pct, "#.##") + "% | " + syminfo.ticker, alert.freq_once_per_bar)
 
 // ========== OPTIONAL: SL & TP LEVEL LINES ==========
 
