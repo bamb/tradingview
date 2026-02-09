@@ -9,6 +9,7 @@ custom_tf = input.timeframe("60", "Custom Timeframe", group=group_tf, tooltip="T
 
 group_main = "Main Settings"
 sl_mode = input.string("Both", "SL Display Mode", options=["Long", "Short", "Both"], group=group_main, tooltip="Long: SL below prev candle low\nShort: SL above prev candle high\nBoth: show both directions")
+entry_source = input.string("Current Price", "Entry Price Source", options=["Current Price", "Candle Open"], group=group_main, tooltip="Current Price: updates live with every tick\nCandle Open: fixed at current candle open")
 display_unit = input.string("Points", "Display Unit", options=["Points", "Ticks", "Cash"], group=group_main, tooltip="Points: price difference\nTicks: number of ticks\nCash: monetary value per contract")
 sl_offset = input.float(0.0, "SL Offset (points)", minval=0.0, step=0.25, group=group_main, tooltip="Additional buffer added to SL beyond the prev candle high/low")
 
@@ -75,17 +76,17 @@ tick_val = get_tick_value()
 tf = use_custom_tf ? custom_tf : timeframe.period
 
 // Fetch candle data from selected timeframe using request.security
-[tf_open, tf_high_1, tf_low_1] = request.security(syminfo.tickerid, tf, [open, high[1], low[1]], lookahead=barmerge.lookahead_on)
+[tf_open, tf_close, tf_high_1, tf_low_1] = request.security(syminfo.tickerid, tf, [open, close, high[1], low[1]], lookahead=barmerge.lookahead_on)
 
 // ========== SL CALCULATIONS ==========
 
 prev_high = tf_high_1
 prev_low = tf_low_1
-curr_open = tf_open
+entry_price = entry_source == "Current Price" ? tf_close : tf_open
 
 // SL in points
-sl_long_points = curr_open - prev_low + sl_offset
-sl_short_points = prev_high - curr_open + sl_offset
+sl_long_points = entry_price - prev_low + sl_offset
+sl_short_points = prev_high - entry_price + sl_offset
 
 // SL in ticks
 sl_long_ticks = sl_long_points / syminfo.mintick
@@ -98,8 +99,8 @@ sl_short_cash = sl_short_ticks * tick_val * contracts
 // ========== R:R & TP CALCULATIONS ==========
 
 // TP levels
-tp_long_level = curr_open + sl_long_points * rr_ratio
-tp_short_level = curr_open - sl_short_points * rr_ratio
+tp_long_level = entry_price + sl_long_points * rr_ratio
+tp_short_level = entry_price - sl_short_points * rr_ratio
 
 // TP in cash
 tp_long_cash = sl_long_cash * rr_ratio
@@ -191,7 +192,7 @@ if barstate.islast
 
     // --- LONG ROW ---
     if sl_mode == "Long" or sl_mode == "Both"
-        entry_sl_long = str.tostring(curr_open, "#.##") + " → " + str.tostring(prev_low - sl_offset, "#.##")
+        entry_sl_long = str.tostring(entry_price, "#.##") + " → " + str.tostring(prev_low - sl_offset, "#.##")
         long_bg = sl_long_exceeded ? color.new(color_danger, 80) : table_bg_color
 
         table.cell(tbl, 0, 3, "LONG ▲", bgcolor=color.new(color_bull, 70), text_color=color_bull, text_size=txt_size, text_halign=text.align_center)
@@ -214,7 +215,7 @@ if barstate.islast
 
     // --- SHORT ROW ---
     if sl_mode == "Short" or sl_mode == "Both"
-        entry_sl_short = str.tostring(curr_open, "#.##") + " → " + str.tostring(prev_high + sl_offset, "#.##")
+        entry_sl_short = str.tostring(entry_price, "#.##") + " → " + str.tostring(prev_high + sl_offset, "#.##")
         short_bg = sl_short_exceeded ? color.new(color_danger, 80) : table_bg_color
 
         table.cell(tbl, 0, 4, "SHORT ▼", bgcolor=color.new(color_bear, 70), text_color=color_bear, text_size=txt_size, text_halign=text.align_center)
@@ -306,8 +307,8 @@ if barstate.islast
 
     if show_sl_lines
         // Entry level line
-        entry_line := line.new(bar_index - bars_back, curr_open, bar_index + bars_forward, curr_open, color=color.new(color.white, 40), style=lstyle, width=line_width_input)
-        entry_label := label.new(bar_index + bars_forward, curr_open, "Entry " + str.tostring(curr_open, "#.##"), style=label.style_label_left, color=color.new(color.white, 80), textcolor=color.white, size=size.small)
+        entry_line := line.new(bar_index - bars_back, entry_price, bar_index + bars_forward, entry_price, color=color.new(color.white, 40), style=lstyle, width=line_width_input)
+        entry_label := label.new(bar_index + bars_forward, entry_price, "Entry " + str.tostring(entry_price, "#.##"), style=label.style_label_left, color=color.new(color.white, 80), textcolor=color.white, size=size.small)
 
         // Long SL line
         if sl_mode == "Long" or sl_mode == "Both"
