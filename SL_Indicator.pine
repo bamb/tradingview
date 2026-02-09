@@ -1,0 +1,185 @@
+//@version=5
+indicator("SL Size Indicator", shorttitle="SL Size", overlay=true)
+
+// ========== INPUT PARAMETERS ==========
+
+group_main = "Main Settings"
+sl_mode = input.string("Both", "SL Display Mode", options=["Long", "Short", "Both"], group=group_main, tooltip="Long: SL below prev candle low\nShort: SL above prev candle high\nBoth: show both directions")
+display_unit = input.string("Points", "Display Unit", options=["Points", "Ticks", "Cash"], group=group_main, tooltip="Points: price difference\nTicks: number of ticks\nCash: monetary value per contract")
+sl_offset = input.float(0.0, "SL Offset (points)", minval=0.0, step=0.25, group=group_main, tooltip="Additional buffer added to SL beyond the prev candle high/low")
+
+group_cash = "Cash Calculation"
+contracts = input.int(1, "Number of Contracts", minval=1, group=group_cash, tooltip="Used for Cash display mode")
+manual_tick_value = input.float(0.0, "Manual Tick Value ($)", minval=0.0, step=0.25, group=group_cash, tooltip="Override auto-detected tick value. Set to 0 for auto-detect")
+
+group_table = "Table Settings"
+table_position = input.string("Top Right", "Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=group_table)
+table_size = input.string("Normal", "Table Size", options=["Small", "Normal", "Large"], group=group_table)
+color_bull = input.color(color.new(color.green, 0), "Long SL Color", group=group_table)
+color_bear = input.color(color.new(color.red, 0), "Short SL Color", group=group_table)
+table_bg_color = input.color(color.new(color.black, 30), "Table Background", group=group_table)
+table_text_color = input.color(color.white, "Table Text Color", group=group_table)
+
+// ========== POSITION MAPPING ==========
+
+get_table_position(pos) =>
+    switch pos
+        "Top Left" => position.top_left
+        "Top Center" => position.top_center
+        "Top Right" => position.top_right
+        "Middle Left" => position.middle_left
+        "Middle Center" => position.middle_center
+        "Middle Right" => position.middle_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right" => position.bottom_right
+
+get_text_size(s) =>
+    switch s
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+
+// ========== TICK VALUE DETECTION ==========
+
+// Auto-detect tick value based on instrument
+auto_tick_value() =>
+    ticker_upper = str.upper(syminfo.ticker)
+    if str.contains(ticker_upper, "MNQ") or str.contains(ticker_upper, "NQ")
+        0.50  // MNQ: $0.50 per tick (0.25 point), NQ: $5.00 but tick is 0.25
+    else if str.contains(ticker_upper, "MES") or str.contains(ticker_upper, "ES")
+        0.50  // MES: $1.25 per tick (0.25 point), ES: $12.50
+    else if str.contains(ticker_upper, "MYM") or str.contains(ticker_upper, "YM")
+        0.50  // MYM: $0.50 per tick (1 point)
+    else if str.contains(ticker_upper, "M2K") or str.contains(ticker_upper, "RTY")
+        0.50  // M2K: $0.50 per tick (0.10 point)
+    else
+        syminfo.mintick * syminfo.pointvalue
+
+// More accurate: use syminfo for point value
+get_tick_value() =>
+    if manual_tick_value > 0
+        manual_tick_value
+    else
+        syminfo.mintick * syminfo.pointvalue
+
+tick_val = get_tick_value()
+
+// ========== SL CALCULATIONS ==========
+
+// Previous candle values
+prev_high = high[1]
+prev_low = low[1]
+curr_open = open
+
+// SL in points (price distance)
+sl_long_points = curr_open - prev_low + sl_offset
+sl_short_points = prev_high - curr_open + sl_offset
+
+// SL in ticks
+sl_long_ticks = sl_long_points / syminfo.mintick
+sl_short_ticks = sl_short_points / syminfo.mintick
+
+// SL in cash (per contract * number of contracts)
+sl_long_cash = sl_long_ticks * tick_val * contracts
+sl_short_cash = sl_short_ticks * tick_val * contracts
+
+// ========== FORMAT VALUES ==========
+
+format_value(val_points, val_ticks, val_cash) =>
+    switch display_unit
+        "Points" => str.tostring(val_points, "#.##") + " pts"
+        "Ticks" => str.tostring(val_ticks, "#.#") + " ticks"
+        "Cash" => "$" + str.tostring(val_cash, "#.##")
+
+long_text = format_value(sl_long_points, sl_long_ticks, sl_long_cash)
+short_text = format_value(sl_short_points, sl_short_ticks, sl_short_cash)
+
+// ========== INSTRUMENT INFO ==========
+
+instrument_info = syminfo.ticker + " | Tick: " + str.tostring(syminfo.mintick) + " | TickVal: $" + str.tostring(tick_val, "#.##")
+
+// ========== TABLE DISPLAY ==========
+
+var tbl = table.new(get_table_position(table_position), 3, 5, border_width=1, border_color=color.gray, frame_width=2, frame_color=color.gray)
+
+txt_size = get_text_size(table_size)
+
+if barstate.islast
+    // Header row
+    table.cell(tbl, 0, 0, "SL Size Indicator", bgcolor=color.new(color.blue, 40), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+    table.merge_cells(tbl, 0, 0, 2, 0)
+
+    // Instrument info row
+    table.cell(tbl, 0, 1, instrument_info, bgcolor=table_bg_color, text_color=color.new(color.white, 30), text_size=size.small, text_halign=text.align_center)
+    table.merge_cells(tbl, 0, 1, 2, 1)
+
+    // Column headers
+    table.cell(tbl, 0, 2, "Direction", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+    table.cell(tbl, 1, 2, "SL Distance", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+    table.cell(tbl, 2, 2, "Entry → SL", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+
+    // Long SL row
+    if sl_mode == "Long" or sl_mode == "Both"
+        entry_sl_long = str.tostring(curr_open, "#.##") + " → " + str.tostring(prev_low - sl_offset, "#.##")
+        table.cell(tbl, 0, 3, "LONG ▲", bgcolor=color.new(color_bull, 70), text_color=color_bull, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 1, 3, long_text, bgcolor=table_bg_color, text_color=color_bull, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 2, 3, entry_sl_long, bgcolor=table_bg_color, text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+    else
+        table.cell(tbl, 0, 3, "", bgcolor=table_bg_color, text_size=txt_size)
+        table.cell(tbl, 1, 3, "", bgcolor=table_bg_color, text_size=txt_size)
+        table.cell(tbl, 2, 3, "", bgcolor=table_bg_color, text_size=txt_size)
+
+    // Short SL row
+    if sl_mode == "Short" or sl_mode == "Both"
+        entry_sl_short = str.tostring(curr_open, "#.##") + " → " + str.tostring(prev_high + sl_offset, "#.##")
+        table.cell(tbl, 0, 4, "SHORT ▼", bgcolor=color.new(color_bear, 70), text_color=color_bear, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 1, 4, short_text, bgcolor=table_bg_color, text_color=color_bear, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 2, 4, entry_sl_short, bgcolor=table_bg_color, text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+    else
+        table.cell(tbl, 0, 4, "", bgcolor=table_bg_color, text_size=txt_size)
+        table.cell(tbl, 1, 4, "", bgcolor=table_bg_color, text_size=txt_size)
+        table.cell(tbl, 2, 4, "", bgcolor=table_bg_color, text_size=txt_size)
+
+// ========== OPTIONAL: SL LEVEL LINES ==========
+
+group_lines = "SL Level Lines"
+show_sl_lines = input.bool(true, "Show SL Lines on Chart", group=group_lines)
+line_style_input = input.string("Dashed", "Line Style", options=["Solid", "Dashed", "Dotted"], group=group_lines)
+line_width_input = input.int(1, "Line Width", minval=1, maxval=4, group=group_lines)
+
+get_line_style(s) =>
+    switch s
+        "Solid" => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+
+var line sl_long_line = na
+var line sl_short_line = na
+var line entry_line = na
+
+if show_sl_lines and barstate.islast
+    // Clean up old lines
+    if not na(sl_long_line)
+        line.delete(sl_long_line)
+    if not na(sl_short_line)
+        line.delete(sl_short_line)
+    if not na(entry_line)
+        line.delete(entry_line)
+
+    lstyle = get_line_style(line_style_input)
+    bars_back = 5
+    bars_forward = 5
+
+    // Entry level line
+    entry_line := line.new(bar_index - bars_back, curr_open, bar_index + bars_forward, curr_open, color=color.new(color.white, 40), style=lstyle, width=line_width_input)
+
+    // Long SL line
+    if sl_mode == "Long" or sl_mode == "Both"
+        sl_long_level = prev_low - sl_offset
+        sl_long_line := line.new(bar_index - bars_back, sl_long_level, bar_index + bars_forward, sl_long_level, color=color_bull, style=lstyle, width=line_width_input)
+
+    // Short SL line
+    if sl_mode == "Short" or sl_mode == "Both"
+        sl_short_level = prev_high + sl_offset
+        sl_short_line := line.new(bar_index - bars_back, sl_short_level, bar_index + bars_forward, sl_short_level, color=color_bear, style=lstyle, width=line_width_input)
