@@ -13,6 +13,7 @@ show_stddev2 = input.bool(false, "Show 2nd Std Dev", group=group_vwap)
 group_sr = "Volume Profile & S/R"
 enable_volume_profile = input.bool(true, "Enable Volume Profile", group=group_sr)
 show_info_table = input.bool(true, "Show Info Table", group=group_sr, tooltip="Show/hide the info table (works independently of Volume Profile)")
+info_table_position = input.string("Top Right", "Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=group_sr)
 show_poc = input.bool(true, "Show Point of Control", group=group_sr)
 show_hvn = input.bool(true, "Show High Volume Nodes", group=group_sr)
 show_lvn = input.bool(false, "Show Low Volume Nodes", group=group_sr)
@@ -453,7 +454,17 @@ if enable_alerts and enable_sr_alerts and not na(poc_price)
 
 // ========== INFO TABLE ==========
 if barstate.islast and show_info_table
-    var table info_table = table.new(position.top_right, 2, 9, bgcolor=color.white, border_width=1)
+    tbl_pos = switch info_table_position
+        "Top Left" => position.top_left
+        "Top Center" => position.top_center
+        "Top Right" => position.top_right
+        "Middle Left" => position.middle_left
+        "Middle Center" => position.middle_center
+        "Middle Right" => position.middle_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right" => position.bottom_right
+    var table info_table = table.new(tbl_pos, 2, 9, bgcolor=color.white, border_width=1)
     
     // Instrument detection info
     instrument_bg = is_mes ? color.orange : color.blue
