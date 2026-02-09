@@ -3,6 +3,10 @@ indicator("SL Size Indicator", shorttitle="SL Size", overlay=true)
 
 // ========== INPUT PARAMETERS ==========
 
+group_tf = "Timeframe Settings"
+use_custom_tf = input.bool(false, "Use Custom Timeframe", group=group_tf, tooltip="When disabled, uses the chart's timeframe.\nWhen enabled, uses the custom timeframe below.")
+custom_tf = input.timeframe("60", "Custom Timeframe", group=group_tf, tooltip="Timeframe for SL candle data (e.g. 1, 5, 15, 60, 240, D, W)")
+
 group_main = "Main Settings"
 sl_mode = input.string("Both", "SL Display Mode", options=["Long", "Short", "Both"], group=group_main, tooltip="Long: SL below prev candle low\nShort: SL above prev candle high\nBoth: show both directions")
 display_unit = input.string("Points", "Display Unit", options=["Points", "Ticks", "Cash"], group=group_main, tooltip="Points: price difference\nTicks: number of ticks\nCash: monetary value per contract")
@@ -65,12 +69,21 @@ get_tick_value() =>
 
 tick_val = get_tick_value()
 
+// ========== TIMEFRAME RESOLUTION ==========
+
+tf = use_custom_tf ? custom_tf : timeframe.period
+tf_label = use_custom_tf ? custom_tf : "Chart"
+
+// Fetch candle data from selected timeframe using request.security
+// When using a higher TF, [1] refers to the previous completed candle of THAT timeframe
+[tf_open, tf_high_1, tf_low_1] = request.security(syminfo.tickerid, tf, [open, high[1], low[1]], lookahead=barmerge.lookahead_on)
+
 // ========== SL CALCULATIONS ==========
 
-// Previous candle values
-prev_high = high[1]
-prev_low = low[1]
-curr_open = open
+// Use timeframe-resolved values
+prev_high = tf_high_1
+prev_low = tf_low_1
+curr_open = tf_open
 
 // SL in points (price distance)
 sl_long_points = curr_open - prev_low + sl_offset
@@ -97,7 +110,8 @@ short_text = format_value(sl_short_points, sl_short_ticks, sl_short_cash)
 
 // ========== INSTRUMENT INFO ==========
 
-instrument_info = syminfo.ticker + " | Tick: " + str.tostring(syminfo.mintick) + " | TickVal: $" + str.tostring(tick_val, "#.##")
+tf_display = use_custom_tf ? ("TF: " + custom_tf) : ("TF: " + timeframe.period)
+instrument_info = syminfo.ticker + " | " + tf_display + " | Tick: " + str.tostring(syminfo.mintick) + " | TickVal: $" + str.tostring(tick_val, "#.##")
 
 // ========== TABLE DISPLAY ==========
 
