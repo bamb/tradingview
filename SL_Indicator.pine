@@ -256,6 +256,8 @@ if short_alert
 group_lines = "SL Level Lines"
 show_sl_lines = input.bool(true, "Show SL Lines on Chart", group=group_lines)
 show_tp_lines = input.bool(true, "Show TP Lines on Chart", group=group_lines)
+show_50_line = input.bool(true, "Show 50% Candle Level", group=group_lines, tooltip="Show the 50% level of the previous candle")
+color_50 = input.color(color.new(color.yellow, 0), "50% Level Color", group=group_lines)
 line_style_input = input.string("Dashed", "Line Style", options=["Solid", "Dashed", "Dotted"], group=group_lines)
 line_width_input = input.int(1, "Line Width", minval=1, maxval=4, group=group_lines)
 
@@ -270,6 +272,7 @@ var line sl_short_line = na
 var line entry_line = na
 var line tp_long_line = na
 var line tp_short_line = na
+var line mid_50_line = na
 
 // Labels
 var label sl_long_label = na
@@ -277,6 +280,7 @@ var label sl_short_label = na
 var label tp_long_label = na
 var label tp_short_label = na
 var label entry_label = na
+var label mid_50_label = na
 
 if barstate.islast
     // Clean up old objects
@@ -300,6 +304,10 @@ if barstate.islast
         label.delete(tp_short_label)
     if not na(entry_label)
         label.delete(entry_label)
+    if not na(mid_50_line)
+        line.delete(mid_50_line)
+    if not na(mid_50_label)
+        label.delete(mid_50_label)
 
     lstyle = get_line_style(line_style_input)
     bars_back = 5
@@ -333,3 +341,9 @@ if barstate.islast
         if sl_mode == "Short" or sl_mode == "Both"
             tp_short_line := line.new(bar_index - bars_back, tp_short_level, bar_index + bars_forward, tp_short_level, color=color.new(color.aqua, 30), style=lstyle, width=line_width_input)
             tp_short_label := label.new(bar_index + bars_forward, tp_short_level, "TP Short " + str.tostring(tp_short_level, "#.##"), style=label.style_label_left, color=color.new(color.aqua, 80), textcolor=color.aqua, size=size.small)
+
+    // 50% previous candle level
+    if show_50_line
+        mid_50_level = (prev_high + prev_low) / 2
+        mid_50_line := line.new(bar_index - bars_back, mid_50_level, bar_index + bars_forward, mid_50_level, color=color_50, style=line.style_dotted, width=line_width_input)
+        mid_50_label := label.new(bar_index + bars_forward, mid_50_level, "50% " + str.tostring(mid_50_level, "#.##"), style=label.style_label_left, color=color.new(color_50, 80), textcolor=color_50, size=size.small)
