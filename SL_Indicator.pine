@@ -8,10 +8,15 @@ use_custom_tf = input.bool(false, "Use Custom Timeframe", group=group_tf, toolti
 custom_tf = input.timeframe("60", "Custom Timeframe", group=group_tf, tooltip="Timeframe for SL candle data (e.g. 1, 5, 15, 60, 240, D, W)")
 
 group_main = "Main Settings"
-sl_mode = input.string("Both", "SL Display Mode", options=["Long", "Short", "Both"], group=group_main, tooltip="Long: SL below prev candle low\nShort: SL above prev candle high\nBoth: show both directions")
+sl_mode = input.string("Both", "SL Display Mode", options=["Long", "Short", "Both", "Auto"], group=group_main, tooltip="Long: SL below prev candle low\nShort: SL above prev candle high\nBoth: show both directions\nAuto: detect direction from prev candle body/wick ratio")
 entry_source = input.string("Current Price", "Entry Price Source", options=["Current Price", "Candle Open"], group=group_main, tooltip="Current Price: updates live with every tick\nCandle Open: fixed at current candle open")
 display_unit = input.string("Points", "Display Unit", options=["Points", "Ticks", "Cash"], group=group_main, tooltip="Points: price difference\nTicks: number of ticks\nCash: monetary value per contract")
 sl_offset = input.float(0.0, "SL Offset (points)", minval=0.0, step=0.25, group=group_main, tooltip="Additional buffer added to SL beyond the prev candle high/low")
+
+group_auto = "Auto Direction"
+body_strong_ratio = input.float(0.66, "Strong Body Ratio", minval=0.1, maxval=0.95, step=0.05, group=group_auto, tooltip="Body > this ratio of total range = STRONG signal (default 2/3)")
+body_weak_ratio = input.float(0.33, "Weak Body Ratio", minval=0.05, maxval=0.9, step=0.05, group=group_auto, tooltip="Body between weak and strong = WEAK signal\nBody < this ratio = DOJI / no signal (default 1/3)")
+auto_doji_mode = input.string("Both", "Doji/No Signal Mode", options=["Both", "None"], group=group_auto, tooltip="What to show when candle body is too small:\nBoth: show both directions\nNone: hide SL/TP")
 
 group_rr = "Risk : Reward"
 show_rr = input.bool(true, "Show R:R & TP Levels", group=group_rr)
@@ -76,13 +81,62 @@ tick_val = get_tick_value()
 tf = use_custom_tf ? custom_tf : timeframe.period
 
 // Fetch candle data from selected timeframe using request.security
-[tf_open, tf_close, tf_high_1, tf_low_1] = request.security(syminfo.tickerid, tf, [open, close, high[1], low[1]], lookahead=barmerge.lookahead_on)
+[tf_open, tf_close, tf_high_1, tf_low_1, tf_open_1, tf_close_1] = request.security(syminfo.tickerid, tf, [open, close, high[1], low[1], open[1], close[1]], lookahead=barmerge.lookahead_on)
 
-// ========== SL CALCULATIONS ==========
+// ========== CANDLE ANALYSIS ==========
 
 prev_high = tf_high_1
 prev_low = tf_low_1
+prev_open = tf_open_1
+prev_close = tf_close_1
 entry_price = entry_source == "Current Price" ? tf_close : tf_open
+
+// Previous candle body and range
+prev_range = prev_high - prev_low
+prev_body = math.abs(prev_close - prev_open)
+body_ratio = prev_range > 0 ? prev_body / prev_range : 0.0
+is_bullish_candle = prev_close > prev_open
+is_bearish_candle = prev_close < prev_open
+
+// Candle strength classification
+is_strong = body_ratio >= body_strong_ratio
+is_weak = body_ratio >= body_weak_ratio and body_ratio < body_strong_ratio
+is_doji = body_ratio < body_weak_ratio
+
+// Auto direction resolution
+auto_show_long = false
+auto_show_short = false
+candle_signal = "DOJI"
+candle_signal_color = color.gray
+
+if sl_mode == "Auto"
+    if is_strong and is_bullish_candle
+        auto_show_long := true
+        candle_signal := "STRONG BULL"
+        candle_signal_color := color.lime
+    else if is_strong and is_bearish_candle
+        auto_show_short := true
+        candle_signal := "STRONG BEAR"
+        candle_signal_color := color.red
+    else if is_weak and is_bullish_candle
+        auto_show_long := true
+        candle_signal := "WEAK BULL"
+        candle_signal_color := color.new(color.green, 40)
+    else if is_weak and is_bearish_candle
+        auto_show_short := true
+        candle_signal := "WEAK BEAR"
+        candle_signal_color := color.new(color.red, 40)
+    else
+        // Doji / indecision
+        candle_signal := "DOJI"
+        candle_signal_color := color.gray
+        if auto_doji_mode == "Both"
+            auto_show_long := true
+            auto_show_short := true
+
+// Resolve final display flags
+show_long = sl_mode == "Long" or sl_mode == "Both" or (sl_mode == "Auto" and auto_show_long)
+show_short = sl_mode == "Short" or sl_mode == "Both" or (sl_mode == "Auto" and auto_show_short)
 
 // SL in points
 sl_long_points = entry_price - prev_low + sl_offset
@@ -147,7 +201,9 @@ instrument_info = syminfo.ticker + " | " + tf_display + " | Tick: " + str.tostri
 
 // Calculate number of columns needed
 total_cols = 3 + (show_rr ? 1 : 0) + (show_account_risk ? 1 : 0) + (enable_max_sl ? 1 : 0)
-total_rows = 5
+// Rows: header(0) + info(1) + signal(2 if Auto) + col_headers + long + short
+has_signal_row = sl_mode == "Auto"
+total_rows = has_signal_row ? 7 : 6
 
 // ========== TABLE DISPLAY ==========
 
@@ -164,82 +220,96 @@ if barstate.islast
     table.cell(tbl, 0, 1, instrument_info, bgcolor=table_bg_color, text_color=color.new(color.white, 30), text_size=size.small, text_halign=text.align_center)
     table.merge_cells(tbl, 0, 1, total_cols - 1, 1)
 
+    // --- Signal row (Auto mode only) ---
+    row_offset = 2
+    if has_signal_row
+        body_pct_text = str.tostring(body_ratio * 100, "#.#") + "%"
+        signal_full_text = candle_signal + " | Body: " + body_pct_text + " of range"
+        table.cell(tbl, 0, row_offset, signal_full_text, bgcolor=color.new(candle_signal_color, 70), text_color=candle_signal_color, text_size=txt_size, text_halign=text.align_center)
+        table.merge_cells(tbl, 0, row_offset, total_cols - 1, row_offset)
+        row_offset += 1
+
     // --- Column headers ---
     col = 0
-    table.cell(tbl, col, 2, "Direction", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+    table.cell(tbl, col, row_offset, "Direction", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
     col += 1
-    table.cell(tbl, col, 2, "SL Distance", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+    table.cell(tbl, col, row_offset, "SL Distance", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
     col += 1
-    table.cell(tbl, col, 2, "Entry → SL", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+    table.cell(tbl, col, row_offset, "Entry → SL", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
 
     rr_col = -1
     if show_rr
         col += 1
         rr_col := col
-        table.cell(tbl, col, 2, "TP (" + str.tostring(rr_ratio, "#.#") + "R)", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, col, row_offset, "TP (" + str.tostring(rr_ratio, "#.#") + "R)", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
 
     risk_col = -1
     if show_account_risk
         col += 1
         risk_col := col
-        table.cell(tbl, col, 2, "Risk %", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, col, row_offset, "Risk %", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
 
     maxsl_col = -1
     if enable_max_sl
         col += 1
         maxsl_col := col
-        table.cell(tbl, col, 2, "Filter", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, col, row_offset, "Filter", bgcolor=color.new(color.gray, 60), text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+
+    long_row = row_offset + 1
+    short_row = row_offset + 2
 
     // --- LONG ROW ---
-    if sl_mode == "Long" or sl_mode == "Both"
+    if show_long
         entry_sl_long = str.tostring(entry_price, "#.##") + " → " + str.tostring(prev_low - sl_offset, "#.##")
         long_bg = sl_long_exceeded ? color.new(color_danger, 80) : table_bg_color
+        long_dir_text = sl_mode == "Auto" and is_weak and is_bullish_candle ? "LONG ▲ ?" : "LONG ▲"
 
-        table.cell(tbl, 0, 3, "LONG ▲", bgcolor=color.new(color_bull, 70), text_color=color_bull, text_size=txt_size, text_halign=text.align_center)
-        table.cell(tbl, 1, 3, long_text, bgcolor=long_bg, text_color=color_bull, text_size=txt_size, text_halign=text.align_center)
-        table.cell(tbl, 2, 3, entry_sl_long, bgcolor=long_bg, text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 0, long_row, long_dir_text, bgcolor=color.new(color_bull, 70), text_color=color_bull, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 1, long_row, long_text, bgcolor=long_bg, text_color=color_bull, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 2, long_row, entry_sl_long, bgcolor=long_bg, text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
 
         if show_rr and rr_col >= 0
             tp_text = str.tostring(tp_long_level, "#.##") + "\n$" + str.tostring(tp_long_cash, "#.##")
-            table.cell(tbl, rr_col, 3, tp_text, bgcolor=long_bg, text_color=color.new(color.aqua, 0), text_size=txt_size, text_halign=text.align_center)
+            table.cell(tbl, rr_col, long_row, tp_text, bgcolor=long_bg, text_color=color.new(color.aqua, 0), text_size=txt_size, text_halign=text.align_center)
 
         if show_account_risk and risk_col >= 0
             risk_txt = str.tostring(risk_long_pct, "#.##") + "%"
-            table.cell(tbl, risk_col, 3, risk_txt, bgcolor=long_bg, text_color=risk_color(risk_long_pct), text_size=txt_size, text_halign=text.align_center)
+            table.cell(tbl, risk_col, long_row, risk_txt, bgcolor=long_bg, text_color=risk_color(risk_long_pct), text_size=txt_size, text_halign=text.align_center)
 
         if enable_max_sl and maxsl_col >= 0
-            table.cell(tbl, maxsl_col, 3, sl_status_text(sl_long_exceeded), bgcolor=long_bg, text_color=sl_status_color(sl_long_exceeded), text_size=txt_size, text_halign=text.align_center)
+            table.cell(tbl, maxsl_col, long_row, sl_status_text(sl_long_exceeded), bgcolor=long_bg, text_color=sl_status_color(sl_long_exceeded), text_size=txt_size, text_halign=text.align_center)
     else
         for c = 0 to total_cols - 1
-            table.cell(tbl, c, 3, "", bgcolor=table_bg_color, text_size=txt_size)
+            table.cell(tbl, c, long_row, "", bgcolor=table_bg_color, text_size=txt_size)
 
     // --- SHORT ROW ---
-    if sl_mode == "Short" or sl_mode == "Both"
+    if show_short
         entry_sl_short = str.tostring(entry_price, "#.##") + " → " + str.tostring(prev_high + sl_offset, "#.##")
         short_bg = sl_short_exceeded ? color.new(color_danger, 80) : table_bg_color
+        short_dir_text = sl_mode == "Auto" and is_weak and is_bearish_candle ? "SHORT ▼ ?" : "SHORT ▼"
 
-        table.cell(tbl, 0, 4, "SHORT ▼", bgcolor=color.new(color_bear, 70), text_color=color_bear, text_size=txt_size, text_halign=text.align_center)
-        table.cell(tbl, 1, 4, short_text, bgcolor=short_bg, text_color=color_bear, text_size=txt_size, text_halign=text.align_center)
-        table.cell(tbl, 2, 4, entry_sl_short, bgcolor=short_bg, text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 0, short_row, short_dir_text, bgcolor=color.new(color_bear, 70), text_color=color_bear, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 1, short_row, short_text, bgcolor=short_bg, text_color=color_bear, text_size=txt_size, text_halign=text.align_center)
+        table.cell(tbl, 2, short_row, entry_sl_short, bgcolor=short_bg, text_color=table_text_color, text_size=txt_size, text_halign=text.align_center)
 
         if show_rr and rr_col >= 0
             tp_text = str.tostring(tp_short_level, "#.##") + "\n$" + str.tostring(tp_short_cash, "#.##")
-            table.cell(tbl, rr_col, 4, tp_text, bgcolor=short_bg, text_color=color.new(color.aqua, 0), text_size=txt_size, text_halign=text.align_center)
+            table.cell(tbl, rr_col, short_row, tp_text, bgcolor=short_bg, text_color=color.new(color.aqua, 0), text_size=txt_size, text_halign=text.align_center)
 
         if show_account_risk and risk_col >= 0
             risk_txt = str.tostring(risk_short_pct, "#.##") + "%"
-            table.cell(tbl, risk_col, 4, risk_txt, bgcolor=short_bg, text_color=risk_color(risk_short_pct), text_size=txt_size, text_halign=text.align_center)
+            table.cell(tbl, risk_col, short_row, risk_txt, bgcolor=short_bg, text_color=risk_color(risk_short_pct), text_size=txt_size, text_halign=text.align_center)
 
         if enable_max_sl and maxsl_col >= 0
-            table.cell(tbl, maxsl_col, 4, sl_status_text(sl_short_exceeded), bgcolor=short_bg, text_color=sl_status_color(sl_short_exceeded), text_size=txt_size, text_halign=text.align_center)
+            table.cell(tbl, maxsl_col, short_row, sl_status_text(sl_short_exceeded), bgcolor=short_bg, text_color=sl_status_color(sl_short_exceeded), text_size=txt_size, text_halign=text.align_center)
     else
         for c = 0 to total_cols - 1
-            table.cell(tbl, c, 4, "", bgcolor=table_bg_color, text_size=txt_size)
+            table.cell(tbl, c, short_row, "", bgcolor=table_bg_color, text_size=txt_size)
 
 // ========== ALERTS ==========
 
-long_alert = enable_sl_alert and sl_long_exceeded and (sl_mode == "Long" or sl_mode == "Both")
-short_alert = enable_sl_alert and sl_short_exceeded and (sl_mode == "Short" or sl_mode == "Both")
+long_alert = enable_sl_alert and sl_long_exceeded and show_long
+short_alert = enable_sl_alert and sl_short_exceeded and show_short
 
 // alertcondition requires const string — use static messages for UI-based alerts
 alertcondition(long_alert, title="Long SL Too Big", message="LONG SL exceeds maximum! Check chart for details.")
@@ -319,14 +389,14 @@ if barstate.islast
         entry_label := label.new(bar_index + bars_forward, entry_price, "Entry " + str.tostring(entry_price, "#.##"), style=label.style_label_left, color=color.new(color.white, 80), textcolor=color.white, size=size.small)
 
         // Long SL line
-        if sl_mode == "Long" or sl_mode == "Both"
+        if show_long
             sl_long_level = prev_low - sl_offset
             sl_color_l = sl_long_exceeded ? color_danger : color_bull
             sl_long_line := line.new(bar_index - bars_back, sl_long_level, bar_index + bars_forward, sl_long_level, color=sl_color_l, style=lstyle, width=line_width_input)
             sl_long_label := label.new(bar_index + bars_forward, sl_long_level, "SL Long " + str.tostring(sl_long_level, "#.##"), style=label.style_label_left, color=color.new(sl_color_l, 80), textcolor=sl_color_l, size=size.small)
 
         // Short SL line
-        if sl_mode == "Short" or sl_mode == "Both"
+        if show_short
             sl_short_level = prev_high + sl_offset
             sl_color_s = sl_short_exceeded ? color_danger : color_bear
             sl_short_line := line.new(bar_index - bars_back, sl_short_level, bar_index + bars_forward, sl_short_level, color=sl_color_s, style=lstyle, width=line_width_input)
@@ -334,11 +404,11 @@ if barstate.islast
 
     // TP lines
     if show_tp_lines and show_rr
-        if sl_mode == "Long" or sl_mode == "Both"
+        if show_long
             tp_long_line := line.new(bar_index - bars_back, tp_long_level, bar_index + bars_forward, tp_long_level, color=color.new(color.aqua, 30), style=lstyle, width=line_width_input)
             tp_long_label := label.new(bar_index + bars_forward, tp_long_level, "TP Long " + str.tostring(tp_long_level, "#.##"), style=label.style_label_left, color=color.new(color.aqua, 80), textcolor=color.aqua, size=size.small)
 
-        if sl_mode == "Short" or sl_mode == "Both"
+        if show_short
             tp_short_line := line.new(bar_index - bars_back, tp_short_level, bar_index + bars_forward, tp_short_level, color=color.new(color.aqua, 30), style=lstyle, width=line_width_input)
             tp_short_label := label.new(bar_index + bars_forward, tp_short_level, "TP Short " + str.tostring(tp_short_level, "#.##"), style=label.style_label_left, color=color.new(color.aqua, 80), textcolor=color.aqua, size=size.small)
 
